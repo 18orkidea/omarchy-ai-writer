@@ -4,7 +4,9 @@ Fix spelling or rewrite the text you have selected in **any window**, with a **l
 
 Your text never leaves your computer: it only talks to Ollama on `127.0.0.1`.
 
-![AI Writer in the Omarchy bar](preview.png)
+![AI Writer: translate menu over a selected text](preview.png)
+
+![The AI Writer icon in the Omarchy bar](bar.png)
 
 ## Usage
 
