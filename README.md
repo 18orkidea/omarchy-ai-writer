@@ -44,7 +44,7 @@ On AMD iGPUs, `ollama-vulkan` plus `OLLAMA_VULKAN=1` and `OLLAMA_IGPU_ENABLE=1` 
 ## Install
 
 ```bash
-omarchy plugin add https://github.com/<owner>/omarchy-ai-writer.git --enable
+omarchy plugin add https://github.com/18orkidea/omarchy-ai-writer.git --enable
 omarchy bar move eu.orkidea.ai-writer --section right   # optional
 ```
 
