@@ -1,13 +1,15 @@
 #!/bin/bash
-# ai-writer: corrige o reescribe el texto seleccionado con un modelo local de Ollama.
+# ai-writer: fix or rewrite the selected text with a local Ollama model.
 #
-# Uso: selecciona texto en cualquier ventana y pulsa CTRL+ALT+clic derecho
-#      (o SUPER+ALT+W). Elige acción, tono y plataforma; el resultado se copia
-#      al portapapeles y se pega sobre la selección.
+# Usage: select text in any window, then run `ai-writer` (menus: action, tone, platform)
+#        or `ai-writer <action>` to skip the menus: fix | improve | rewrite | shorten | expand
+#        | translate:<lang> (en, es, fr, de, it, pt, ca). The result replaces the selection
+#        and is also copied to the clipboard.
 #
-# Variables opcionales:
-#   AI_WRITER_MODEL   modelo de Ollama (por defecto gemma4:e4b)
-#   OLLAMA_HOST       servidor de Ollama (por defecto http://127.0.0.1:11434)
+# Optional environment:
+#   AI_WRITER_MODEL   Ollama model (default gemma4:e4b)
+#   AI_WRITER_LANG    interface language: es | en (default: from LANG, falling back to en)
+#   OLLAMA_HOST       Ollama server (default http://127.0.0.1:11434)
 
 set -uo pipefail
 
@@ -15,39 +17,89 @@ MODEL="${AI_WRITER_MODEL:-gemma4:e4b}"
 HOST="${OLLAMA_HOST:-http://127.0.0.1:11434}"
 [[ $HOST == http* ]] || HOST="http://$HOST"
 
+# --- Interface language ------------------------------------------------------
+ui_lang="${AI_WRITER_LANG:-${LANGUAGE:-${LC_ALL:-${LC_MESSAGES:-${LANG:-en}}}}}"
+ui_lang="${ui_lang%%[_.:@]*}"
+[[ $ui_lang == es ]] || ui_lang=en
+
+declare -A T
+if [[ $ui_lang == es ]]; then
+  T=(
+    [no_text_title]="No hay texto" [no_text_body]="Selecciona el texto (o cópialo) antes de usar el corrector."
+    [menu_action]="Acción" [menu_tone]="Tono" [menu_platform]="Plataforma" [menu_target]="Traducir a"
+    [fix]="Corregir ortografía" [improve]="Mejorar redacción" [rewrite]="Reescribir"
+    [shorten]="Acortar" [expand]="Alargar / desarrollar" [translate]="Traducir…"
+    [keep]="Mantener el tono original" [professional]="Profesional" [formal]="Formal" [friendly]="Cercano"
+    [funny]="Divertido" [persuasive]="Persuasivo" [empathetic]="Empático" [direct]="Directo y conciso"
+    [enthusiastic]="Entusiasta"
+    [auto]="Auto" [general]="General" [email]="Email"
+    [working]="Procesando…" [unknown]="Acción desconocida"
+    [error]="Error de Ollama" [copied]="Copiado al portapapeles"
+    [replaced]="Texto reemplazado (también en el portapapeles)"
+  )
+else
+  T=(
+    [no_text_title]="No text" [no_text_body]="Select the text (or copy it) before using AI Writer."
+    [menu_action]="Action" [menu_tone]="Tone" [menu_platform]="Platform" [menu_target]="Translate to"
+    [fix]="Fix spelling" [improve]="Improve wording" [rewrite]="Rewrite"
+    [shorten]="Shorten" [expand]="Expand" [translate]="Translate…"
+    [keep]="Keep the original tone" [professional]="Professional" [formal]="Formal" [friendly]="Friendly"
+    [funny]="Funny" [persuasive]="Persuasive" [empathetic]="Empathetic" [direct]="Direct and concise"
+    [enthusiastic]="Enthusiastic"
+    [auto]="Auto" [general]="General" [email]="Email"
+    [working]="Working…" [unknown]="Unknown action"
+    [error]="Ollama error" [copied]="Copied to clipboard"
+    [replaced]="Text replaced (also in the clipboard)"
+  )
+fi
+
+# Translation targets, shown by their own name.
+declare -A LANG_NAME=([en]="English" [es]="Español" [fr]="Français" [de]="Deutsch" [it]="Italiano" [pt]="Português" [ca]="Català")
+LANG_ORDER=(en es fr de it pt ca)
+
 notify() { notify-send -a "AI Writer" -i accessories-text-editor "$@"; }
 
-# 1. Texto: la selección actual (primary); si no hay, el portapapeles.
+# Shows the labels of the given keys and prints the key of the chosen one (fails if cancelled).
+declare -A LABEL
+pick() { # prompt key...
+  local prompt=$1; shift
+  local -a labels=() keys=("$@")
+  local k choice
+  for k in "${keys[@]}"; do labels+=("${LABEL[$k]}"); done
+  choice=$(omarchy-menu-select "$prompt" "${labels[@]}" -- --width 420) || return 1
+  for k in "${keys[@]}"; do [[ ${LABEL[$k]} == "$choice" ]] && { echo "$k"; return 0; }; done
+  return 1
+}
+
+# --- 1. Text: current selection (primary), or the clipboard --------------------
 text=$(wl-paste --primary --no-newline 2>/dev/null)
+[[ -z ${text//[[:space:]]/} ]] && text=$(wl-paste --no-newline 2>/dev/null)
 if [[ -z ${text//[[:space:]]/} ]]; then
-  text=$(wl-paste --no-newline 2>/dev/null)
-fi
-if [[ -z ${text//[[:space:]]/} ]]; then
-  notify "No hay texto" "Selecciona el texto (o cópialo) antes de usar el corrector."
+  notify "${T[no_text_title]}" "${T[no_text_body]}"
   exit 1
 fi
 
-# 2. Detecta la plataforma a partir de la ventana activa.
+# --- 2. Platform detection from the active window -----------------------------
 win=$(hyprctl activewindow -j 2>/dev/null)
 win_class=$(jq -r '.class // ""' <<<"$win")
 win_title=$(jq -r '.title // ""' <<<"$win")
 haystack="${win_class,,} ${win_title,,}"
 
-detected="General"
+detected="general"
 case "$haystack" in
-  *youtube*)                         detected="YouTube" ;;
-  *twitter*|*" / x"*|*x.com*)        detected="Twitter/X" ;;
-  *linkedin*)                        detected="LinkedIn" ;;
-  *instagram*)                       detected="Instagram" ;;
-  *facebook*)                        detected="Facebook" ;;
-  *whatsapp*)                        detected="WhatsApp" ;;
-  *telegram*)                        detected="Telegram" ;;
-  *slack*)                           detected="Slack" ;;
-  *discord*)                         detected="Discord" ;;
-  *reddit*)                          detected="Reddit" ;;
-  *tiktok*)                          detected="TikTok" ;;
-  *gmail*|*outlook*|*thunderbird*|*mail*) detected="Email" ;;
-  *github*|*gitlab*)                 detected="GitHub" ;;
+  *youtube*)                              detected="youtube" ;;
+  *twitter*|*" / x"*|*x.com*)             detected="x" ;;
+  *linkedin*)                             detected="linkedin" ;;
+  *instagram*)                            detected="instagram" ;;
+  *facebook*)                             detected="facebook" ;;
+  *whatsapp*)                             detected="whatsapp" ;;
+  *telegram*)                             detected="telegram" ;;
+  *slack*)                                detected="slack" ;;
+  *discord*)                              detected="discord" ;;
+  *reddit*)                               detected="reddit" ;;
+  *tiktok*)                               detected="tiktok" ;;
+  *gmail*|*outlook*|*thunderbird*|*mail*) detected="email" ;;
+  *github*|*gitlab*)                      detected="github" ;;
 esac
 
 is_terminal=0
@@ -55,81 +107,112 @@ case "${win_class,,}" in
   *alacritty*|*kitty*|*foot*|*ghostty*|*wezterm*|*terminal*) is_terminal=1 ;;
 esac
 
-# 3. Menús. Con una acción como argumento (p. ej. ai-writer "Corregir ortografía")
-#    se saltan: tono original y plataforma detectada.
+declare -A PLATFORM_NAME=([general]="${T[general]}" [youtube]="YouTube" [x]="X / Twitter" [linkedin]="LinkedIn"
+  [instagram]="Instagram" [facebook]="Facebook" [whatsapp]="WhatsApp" [telegram]="Telegram" [slack]="Slack"
+  [discord]="Discord" [reddit]="Reddit" [tiktok]="TikTok" [email]="${T[email]}" [github]="GitHub")
+PLATFORM_ORDER=(general youtube x linkedin instagram facebook whatsapp telegram slack discord reddit tiktok email github)
+
+# --- 3. Choices: from the argument, or from the menus -------------------------
+tone="keep"
+platform=$detected
+target=""
+
 if [[ -n ${1:-} ]]; then
   action=$1
-  tone="Mantener el tono original"
-  platform=$detected
+  # Older Spanish labels still work (e.g. from existing keybindings).
+  case "$action" in
+    "Corregir ortografía")   action=fix ;;
+    "Mejorar redacción")     action=improve ;;
+    "Reescribir")            action=rewrite ;;
+    "Acortar")               action=shorten ;;
+    "Alargar / desarrollar") action=expand ;;
+    "Traducir al inglés")    action=translate:en ;;
+    "Traducir al español")   action=translate:es ;;
+  esac
+  if [[ $action == translate:* ]]; then target=${action#translate:}; action=translate; fi
 else
-action=$(omarchy-menu-select "Acción" \
-  "Corregir ortografía" \
-  "Mejorar redacción" \
-  "Reescribir" \
-  "Acortar" \
-  "Alargar / desarrollar" \
-  "Traducir al inglés" \
-  "Traducir al español" -- --width 420) || exit 0
+  for k in fix improve rewrite shorten expand translate keep professional formal friendly funny persuasive \
+           empathetic direct enthusiastic; do LABEL[$k]=${T[$k]}; done
 
-tone="Mantener el tono original"
-if [[ $action != "Corregir ortografía" ]]; then
-  tone=$(omarchy-menu-select "Tono" \
-    "Mantener el tono original" \
-    "Profesional" \
-    "Formal" \
-    "Cercano" \
-    "Divertido" \
-    "Persuasivo" \
-    "Empático" \
-    "Directo y conciso" \
-    "Entusiasta" -- --width 420) || exit 0
+  action=$(pick "${T[menu_action]}" fix improve rewrite shorten expand translate) || exit 0
+
+  if [[ $action == translate ]]; then
+    for l in "${LANG_ORDER[@]}"; do LABEL[$l]=${LANG_NAME[$l]}; done
+    target=$(pick "${T[menu_target]}" "${LANG_ORDER[@]}") || exit 0
+  elif [[ $action != fix ]]; then
+    tone=$(pick "${T[menu_tone]}" keep professional formal friendly funny persuasive empathetic direct enthusiastic) || exit 0
+  fi
+
+  if [[ $action != fix && $action != translate ]]; then
+    LABEL[auto]="${T[auto]}: ${PLATFORM_NAME[$detected]}"
+    keys=(auto)
+    for p in "${PLATFORM_ORDER[@]}"; do [[ $p != "$detected" ]] && { LABEL[$p]=${PLATFORM_NAME[$p]}; keys+=("$p"); }; done
+    platform=$(pick "${T[menu_platform]}" "${keys[@]}") || exit 0
+    [[ $platform == auto ]] && platform=$detected
+  fi
 fi
 
-platforms=(General YouTube Twitter/X LinkedIn Instagram Facebook WhatsApp Telegram Slack Discord Reddit TikTok Email GitHub)
-options=("Auto: $detected")
-for p in "${platforms[@]}"; do [[ $p != "$detected" ]] && options+=("$p"); done
-platform=$(omarchy-menu-select "Plataforma" "${options[@]}" -- --width 420) || exit 0
-platform="${platform#Auto: }"
+if [[ $action == translate && -z ${LANG_NAME[$target]:-} ]]; then
+  notify -u critical "${T[unknown]}" "translate:$target"
+  exit 2
 fi
 
-# 4. Instrucciones.
+# --- 4. Instructions for the model (in English: small models follow it best) ---
 case "$action" in
-  "Corregir ortografía")    task="Corrige SOLO la ortografía, gramática, acentos y puntuación. No cambies el estilo, las palabras ni la estructura salvo lo imprescindible." ;;
-  "Mejorar redacción")      task="Mejora la redacción: claridad, fluidez y corrección, conservando el significado y aproximadamente la misma longitud." ;;
-  "Reescribir")             task="Reescribe el texto por completo con otras palabras, conservando el mensaje." ;;
-  "Acortar")                task="Reescribe el texto de forma mucho más breve, conservando lo esencial." ;;
-  "Alargar / desarrollar")  task="Desarrolla y amplía el texto con más detalle, sin inventar datos concretos." ;;
-  "Traducir al inglés")     task="Traduce el texto al inglés de forma natural." ;;
-  "Traducir al español")    task="Traduce el texto al español de España de forma natural." ;;
-  *) notify -u critical "Acción desconocida" "$action"; exit 2 ;;
+  fix)       task="Fix ONLY spelling, grammar, accents and punctuation, including words written phonetically or with missing letters (for example Spanish \"oy\" → \"hoy\", \"e\" → \"he\"). Do not change the style, the words or the structure unless strictly necessary." ;;
+  improve)   task="Improve the wording: clarity, flow and correctness, keeping the meaning and roughly the same length." ;;
+  rewrite)   task="Rewrite the text completely in different words, keeping the message." ;;
+  shorten)   task="Rewrite the text much shorter, keeping only what matters." ;;
+  expand)    task="Develop and expand the text with more detail, without inventing specific facts." ;;
+  translate) task="Translate the text into ${LANG_NAME[$target]} naturally, as a native speaker would write it." ;;
+  *) notify -u critical "${T[unknown]}" "$action"; exit 2 ;;
+esac
+
+case "$tone" in
+  professional) tone_rule="Tone: professional." ;;
+  formal)       tone_rule="Tone: formal." ;;
+  friendly)     tone_rule="Tone: warm and friendly." ;;
+  funny)        tone_rule="Tone: funny and light-hearted." ;;
+  persuasive)   tone_rule="Tone: persuasive." ;;
+  empathetic)   tone_rule="Tone: empathetic." ;;
+  direct)       tone_rule="Tone: direct and concise." ;;
+  enthusiastic) tone_rule="Tone: enthusiastic." ;;
+  *)            tone_rule="Keep the original tone." ;;
 esac
 
 case "$platform" in
-  YouTube)    style="Es para YouTube (título, descripción o comentario): enganchador, claro, puede usar algún emoji con moderación." ;;
-  Twitter/X)  style="Es un tuit para Twitter/X: máximo 280 caracteres, directo, sin relleno; hashtags solo si aportan." ;;
-  LinkedIn)   style="Es para LinkedIn: profesional, párrafos cortos, orientado a aportar valor." ;;
-  Instagram)  style="Es para Instagram: cercano, visual, emojis moderados y hashtags relevantes al final." ;;
-  Facebook)   style="Es para Facebook: cercano y conversacional." ;;
-  WhatsApp|Telegram) style="Es un mensaje de chat ($platform): natural, breve y conversacional." ;;
-  Slack|Discord) style="Es un mensaje de $platform: claro y breve, apto para un canal de trabajo o comunidad." ;;
-  Reddit)     style="Es para Reddit: natural, sin tono de marketing." ;;
-  TikTok)     style="Es para TikTok: muy breve, llamativo, con gancho inicial." ;;
-  Email)      style="Es un correo electrónico: estructura clara, saludo y despedida adecuados si procede." ;;
-  GitHub)     style="Es para GitHub (issue, PR o comentario): técnico, preciso y conciso; respeta el Markdown y el código." ;;
-  *)          style="Texto de uso general." ;;
+  youtube)   style="It is for YouTube (title, description or comment): catchy and clear; a few emojis at most." ;;
+  x)         style="It is a post for X/Twitter: 280 characters maximum, direct, no filler; hashtags only if they add something." ;;
+  linkedin)  style="It is for LinkedIn: professional, short paragraphs, focused on providing value." ;;
+  instagram) style="It is for Instagram: friendly and visual, a few emojis and relevant hashtags at the end." ;;
+  facebook)  style="It is for Facebook: friendly and conversational." ;;
+  whatsapp|telegram) style="It is a chat message: natural, short and conversational." ;;
+  slack|discord) style="It is a message for a work or community channel: clear and short." ;;
+  reddit)    style="It is for Reddit: natural, no marketing tone." ;;
+  tiktok)    style="It is for TikTok: very short and eye-catching, with a hook at the start." ;;
+  email)     style="It is an email: clear structure, with a suitable greeting and sign-off if appropriate." ;;
+  github)    style="It is for GitHub (issue, PR or comment): technical, precise and concise; keep Markdown and code as they are." ;;
+  *)         style="General-purpose text." ;;
 esac
 
-if [[ $action == Traducir* ]]; then
-  lang_rule="Responde en el idioma de destino."
+if [[ $action == translate ]]; then
+  lang_rule="Answer in ${LANG_NAME[$target]}."
 else
-  lang_rule="Responde en el MISMO idioma del texto original."
+  lang_rule="Answer in the SAME language as the original text."
 fi
 
-system="Eres un corrector y redactor experto. $task Tono: $tone. $style $lang_rule
-Devuelve ÚNICAMENTE el texto final, sin comillas, sin explicaciones, sin encabezados ni notas."
+system="You are an expert editor and writer. $task $tone_rule $style $lang_rule
+Return ONLY the final text: no quotes, no explanations, no headings, no notes."
 
-# 5. Llamada a Ollama.
-notify -t 3000 "Procesando…" "$action · $tone · $platform"
+# --- 5. Call Ollama -----------------------------------------------------------
+if [[ $action == translate ]]; then
+  summary="${T[menu_target]} ${LANG_NAME[$target]}"
+elif [[ $action == fix ]]; then
+  summary="${T[fix]}"
+else
+  summary="${T[$action]} · ${T[$tone]} · ${PLATFORM_NAME[$platform]}"
+fi
+notify -t 3000 "${T[working]}" "$summary"
 
 payload=$(jq -n --arg m "$MODEL" --arg s "$system" --arg t "$text" '{
   model: $m, stream: false, think: false, keep_alive: "15m",
@@ -142,17 +225,17 @@ result=$(jq -r '.message.content // "" | gsub("^\\s+|\\s+$"; "")' <<<"$response"
 
 if [[ -z $result ]]; then
   err=$(jq -r '.error // empty' <<<"$response" 2>/dev/null)
-  notify -u critical "Error de Ollama" "${err:-$response}"
+  notify -u critical "${T[error]}" "${err:-$response}"
   exit 1
 fi
 
-# 6. Entrega: portapapeles + pegar sobre la selección.
+# --- 6. Deliver: clipboard + paste over the selection --------------------------
 printf '%s' "$result" | wl-copy
 
 if (( is_terminal )); then
-  notify "Copiado al portapapeles" "$result"
+  notify "${T[copied]}" "$result"
 else
   sleep 0.2
   wtype -M ctrl -k v -m ctrl
-  notify -t 4000 "Texto reemplazado (también en el portapapeles)" "$result"
+  notify -t 4000 "${T[replaced]}" "$result"
 fi

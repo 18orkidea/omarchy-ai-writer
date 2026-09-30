@@ -19,11 +19,13 @@ Your text never leaves your computer: it only talks to Ollama on `127.0.0.1`.
 
 The icon lights up while the model is working. In terminals the result is only copied (not pasted).
 
-**Actions:** fix spelling · improve wording · rewrite · shorten · expand · translate to English · translate to Spanish.
+**Actions:** fix spelling · improve wording · rewrite · shorten · expand · translate (English, Español, Français, Deutsch, Italiano, Português, Català).
 **Tones:** keep original · professional · formal · friendly · funny · persuasive · empathetic · direct · enthusiastic.
 **Platforms:** auto-detected from the active window, or pick one (X/Twitter keeps it under 280 characters, LinkedIn uses short paragraphs, email adds greeting and sign-off…).
 
-> The menus are in Spanish for now. The model always answers in the language of your text (or the target language when translating).
+**Languages:** the menus and notifications follow your system language (English and Spanish today; English is the fallback). Force one with `AI_WRITER_LANG=en` or `es`. The model always answers in the language of your text, or in the target language when translating.
+
+**Without menus:** `ai-writer fix`, `improve`, `rewrite`, `shorten`, `expand` or `translate:<lang>` (`en`, `es`, `fr`, `de`, `it`, `pt`, `ca`).
 
 ## Requirements
 
@@ -53,8 +55,9 @@ Add to `~/.config/hypr/bindings.lua` (adjust the path to where the plugin was in
 ```lua
 local aiw = os.getenv("HOME") .. "/.config/omarchy/plugins/eu.orkidea.ai-writer/bin/ai-writer"
 o.bind("SUPER + ALT + W", "AI Writer: menu", aiw)
-o.bind("SUPER + ALT + C", "AI Writer: fix spelling", aiw .. " 'Corregir ortografía'")
-o.bind("SUPER + ALT + R", "AI Writer: improve wording", aiw .. " 'Mejorar redacción'")
+o.bind("SUPER + ALT + C", "AI Writer: fix spelling", aiw .. " fix")
+o.bind("SUPER + ALT + R", "AI Writer: improve wording", aiw .. " improve")
+o.bind("SUPER + ALT + T", "AI Writer: translate to English", aiw .. " translate:en")
 ```
 
 ## Configuration
@@ -62,9 +65,14 @@ o.bind("SUPER + ALT + R", "AI Writer: improve wording", aiw .. " 'Mejorar redacc
 | Variable | Default | |
 |---|---|---|
 | `AI_WRITER_MODEL` | `gemma4:e4b` | Any Ollama chat model |
+| `AI_WRITER_LANG` | from `LANG` | Interface language: `es` or `en` |
 | `OLLAMA_HOST` | `http://127.0.0.1:11434` | Ollama server |
 
 The widget setting **command** lets you point to your own script; empty uses the bundled `bin/ai-writer`.
+
+## Contributing translations
+
+All interface strings live in the `T` table at the top of `bin/ai-writer` (plus two tooltips in `BarWidget.qml`). Pull requests adding a language are welcome.
 
 ## Uninstall
 
@@ -77,7 +85,9 @@ rm -rf ~/.config/omarchy/plugins/eu.orkidea.ai-writer
 
 ## Español
 
-Corrige la ortografía o reescribe el texto seleccionado en cualquier ventana con un modelo **local** de Ollama. Elige acción, tono y plataforma, o deja que detecte dónde escribes. Clic izquierdo: menús · clic derecho: corregir ortografía · clic central: mejorar redacción. Tu texto no sale de tu ordenador.
+Corrige la ortografía, reescribe o traduce el texto seleccionado en cualquier ventana con un modelo **local** de Ollama. Elige acción, tono y plataforma, o deja que detecte dónde escribes. Clic izquierdo: menús · clic derecho: corregir ortografía · clic central: mejorar redacción. Los menús salen en el idioma del sistema (español o inglés). Tu texto no sale de tu ordenador.
+
+¿Quieres añadir tu idioma? Las traducciones están al principio de `bin/ai-writer`: se aceptan pull requests.
 
 ---
 
