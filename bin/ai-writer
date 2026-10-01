@@ -214,28 +214,32 @@ else
 fi
 notify -t 3000 "${T[working]}" "$summary"
 
-payload=$(jq -n --arg m "$MODEL" --arg s "$system" --arg t "$text" '{
+# The user's text never goes into a command line (visible to other processes in
+# /proc/*/cmdline): it reaches jq and curl through stdin. printf is a shell builtin.
+payload=$(printf '%s' "$text" | jq -Rs --arg m "$MODEL" --arg s "$system" '{
   model: $m, stream: false, think: false, keep_alive: "15m",
   options: { temperature: 0.3 },
-  messages: [ {role: "system", content: $s}, {role: "user", content: $t} ]
+  messages: [ {role: "system", content: $s}, {role: "user", content: .} ]
 }')
 
-response=$(curl -sS --max-time 180 "$HOST/api/chat" -d "$payload" 2>&1)
+response=$(printf '%s' "$payload" | curl -sS --max-time 180 "$HOST/api/chat" --data-binary @- 2>&1)
 result=$(jq -r '.message.content // "" | gsub("^\\s+|\\s+$"; "")' <<<"$response" 2>/dev/null)
 
 if [[ -z $result ]]; then
   err=$(jq -r '.error // empty' <<<"$response" 2>/dev/null)
-  notify -u critical "${T[error]}" "${err:-$response}"
+  [[ -z $err ]] && err=$(head -c 200 <<<"$response" | grep -m1 '^curl:')
+  notify -u critical "${T[error]}" "${err:-$HOST}"
   exit 1
 fi
 
 # --- 6. Deliver: clipboard + paste over the selection --------------------------
+# Notifications never include the text: notify-send would expose it in its command line.
 printf '%s' "$result" | wl-copy
 
 if (( is_terminal )); then
-  notify "${T[copied]}" "$result"
+  notify "${T[copied]}"
 else
   sleep 0.2
   wtype -M ctrl -k v -m ctrl
-  notify -t 4000 "${T[replaced]}" "$result"
+  notify -t 4000 "${T[replaced]}"
 fi

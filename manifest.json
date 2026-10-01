@@ -2,21 +2,31 @@
   "schemaVersion": 1,
   "id": "eu.orkidea.ai-writer",
   "name": "AI Writer",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "author": "Orkidea (orkidea.eu)",
   "license": "MIT",
   "description": "Fix spelling or rewrite the selected text in any window with a local Ollama model. Choose tone and platform (X, LinkedIn, YouTube, email…); it detects the app you are in.",
-  "kinds": ["bar-widget"],
-  "entryPoints": { "barWidget": "BarWidget.qml" },
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "BarWidget.qml"
+  },
   "barWidget": {
     "displayName": "AI Writer",
     "description": "Left click: pick action, tone and platform · Right click: fix spelling · Middle click: improve wording",
     "category": "Utilities",
     "allowMultiple": false,
     "defaultSection": "right",
-    "defaults": { "command": "" },
+    "defaults": {
+      "command": ""
+    },
     "schema": [
-      { "key": "command", "type": "string", "label": "Custom command (empty = bundled bin/ai-writer)" }
+      {
+        "key": "command",
+        "type": "string",
+        "label": "Custom command (empty = bundled bin/ai-writer)"
+      }
     ]
   }
 }
